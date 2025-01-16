@@ -1,0 +1,150 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+from collections import Counter
+
+# input streamflow
+df = pd.read_csv('GRDC_4_Stations_Trend.csv')
+
+df.replace(-999, np.nan, inplace=True)
+
+df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+
+
+df.dropna(subset=['Date'], inplace=True)
+
+
+df.set_index('Date', inplace=True)
+df.sort_index(inplace=True)
+
+# input stations similar to csv file
+stations = ["6211500", "6211100", "6211160"]
+
+# Mann-Kendall Test 
+def mann_kendall(x):
+    n = len(x)
+    if n < 2:
+        return 0, 0, 0, 1, 'no trend'
+    
+    # Calculate the differences
+    diff = np.diff(x)
+    s = np.sum(np.sign(diff))
+    
+    # Calculate variance_s
+    unique_x = np.unique(x)
+    g = len(unique_x)
+    if g == n:
+        variance_s = n * (n - 1) * (2 * n + 5) / 18
+    else:
+        variance_s = n * (n - 1) * (2 * n + 5) / 18
+        for xi in unique_x:
+            count = np.sum(x == xi)
+            if count > 1:
+                variance_s -= count * (count - 1) * (2 * count + 5) / 18
+    
+    # Calculate z and p
+    if s > 0:
+        z = s / np.sqrt(variance_s)
+    elif s < 0:
+        z = -s / np.sqrt(variance_s)
+    else:
+        z = 0
+    
+    p = 2 * (1 - stats.norm.cdf(abs(z)))
+    
+    if s > 0:
+        trend = 'increasing'
+    elif s < 0:
+        trend = 'decreasing'
+    else:
+        trend = 'no trend'
+    
+    return s, variance_s, z, p, trend
+
+# Sen's Slope 
+def sen_slope(x, y):
+    n = len(x)
+    if n < 2:
+        return 0
+    
+    slopes = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            if x[j] != x[i]:
+                slope = (y[j] - y[i]) / (x[j] - x[i])
+                slopes.append(slope)
+    median_slope = np.median(slopes)
+    return median_slope
+
+# list to store results
+results = []
+
+# annual averages
+annual_df = df.resample('Y').mean()
+
+# Loop through each station
+for station in stations:
+    # Extract the annual average discharge data for the station
+    annual_discharge = annual_df[station].dropna()
+    
+    # Check the number of years (in this case 20, you can choose based on data availability)
+    years = annual_discharge.index.year
+    if len(years) < 20:
+        print(f"Station {station} has data for only {len(years)} years. Skipping analysis.")
+        continue
+    
+    # Performing Mann-Kendall test
+    s, variance_s, z, p, trend = mann_kendall(annual_discharge.values)
+    
+    # Calculating Sen's slope
+    x_years = np.arange(len(years))
+    slope = sen_slope(x_years, annual_discharge.values)
+    
+    # finding significance
+    if p < 0.05:
+        significance = 'Significant'
+    else:
+        significance = 'Not Significant'
+    
+    # Append results
+    results.append({
+        'Station': station,
+        'Mann-Kendall S': s,
+        'Variance S': variance_s,
+        'Z': z,
+        'P-value': p,
+        'Trend': trend,
+        'Sen Slope': slope,
+        'Significance': significance
+    })
+    
+        # Print the results for the current station
+    print(f"Station: {station}")
+    print(f"  Mann-Kendall S: {s}")
+    print(f"  P-value: {p:.4f}")
+    print(f"  Trend: {trend}")
+    print(f"  Sen's Slope: {slope:.4f}")
+    print(f"  Significance: {significance}")
+    print()
+    
+    
+    # Plot
+    plt.figure(figsize=(12, 6))
+    plt.plot(years, annual_discharge.values, label='Annual Discharge', marker='o')
+    
+    # Calculate trend line
+    y_fit = slope * x_years + annual_discharge.values[0]
+    plt.plot(years, y_fit, linestyle='--', label=f"Sen's Slope: {slope:.2f}", color='red')
+    
+    plt.title(f'{station} Annual Discharge Trend - {trend} ({significance})')
+    plt.xlabel('Year')
+    plt.ylabel('Annual Average Discharge')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f'{station}_annual_discharge_trend.png')
+    plt.show()
+
+# Creating a DataFrame from results and save to CSV
+results_df = pd.DataFrame(results)
+results_df.to_csv('annual_trend_analysis_results.csv', index=False)
